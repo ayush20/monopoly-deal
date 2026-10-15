@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .cards import Color
 from .errors import GameRuleError
 from .game import GameState
 from .payments import settle_payment
+from .rent import calculate_rent
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,3 +66,24 @@ def debt_collector_obligation(owner_id: str, target_id: str) -> ObligationQueue:
     if owner_id == target_id:
         raise GameRuleError("Debt Collector must target another player.")
     return ObligationQueue([PaymentObligation(target_id, owner_id, 5, "debt_collector")])
+
+
+def rent_obligations(
+    state: GameState,
+    *,
+    owner_id: str,
+    color: Color,
+    target_ids: list[str],
+    double_rent: bool = False,
+) -> ObligationQueue:
+    """Create rent debts after server-side ownership and amount validation."""
+    if not target_ids:
+        raise GameRuleError("Rent must target at least one other player.")
+    if owner_id in target_ids or len(target_ids) != len(set(target_ids)):
+        raise GameRuleError("Rent targets must be unique opponents.")
+    for target_id in target_ids:
+        state.player(target_id)
+    amount = calculate_rent(state, owner_id=owner_id, color=color, double_rent=double_rent)
+    return ObligationQueue(
+        [PaymentObligation(target_id, owner_id, amount, "rent") for target_id in target_ids]
+    )
