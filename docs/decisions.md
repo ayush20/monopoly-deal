@@ -39,6 +39,13 @@ Documented setup and turn rules now encoded in tests:
 - Wild properties may be moved between compatible sets only during their owner's turn and do not consume a card play.
 - A House requires a complete set; a Hotel requires that set's House.
 
+Strict payment behavior encoded in tests:
+
+- A debt may be paid only with cards already laid in a bank or property area; hand cards are excluded.
+- A payer may overpay but receives no change.
+- If the payer cannot cover the debt, every available non-zero-value laid card must be paid.
+- The two multicolour property wild cards have no cash value and cannot settle a debt.
+
 ## Unresolved questions
 
 None currently blocking Phase 1. During the rules-engine phase, any ambiguity found in the official guide—particularly timing and response windows—will be added here with its source and implementation decision.

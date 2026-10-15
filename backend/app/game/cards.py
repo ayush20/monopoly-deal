@@ -71,6 +71,19 @@ RENT_SCHEDULE: dict[Color, tuple[int, ...]] = {
     Color.UTILITY: (1, 2),
 }
 
+PROPERTY_VALUE: dict[Color, int] = {
+    Color.BROWN: 1,
+    Color.LIGHT_BLUE: 1,
+    Color.PINK: 2,
+    Color.ORANGE: 2,
+    Color.RED: 3,
+    Color.YELLOW: 3,
+    Color.GREEN: 4,
+    Color.DARK_BLUE: 4,
+    Color.RAILROAD: 2,
+    Color.UTILITY: 2,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class Card:
@@ -126,25 +139,25 @@ def build_playable_deck() -> list[Card]:
             prefix=f"property-{color.value}",
             count=count,
             card_type=CardType.PROPERTY,
-            value=None,
+            value=PROPERTY_VALUE[color],
             colors=frozenset({color}),
         )
 
-    for first, second, count in (
-        (Color.LIGHT_BLUE, Color.BROWN, 1),
-        (Color.LIGHT_BLUE, Color.RAILROAD, 1),
-        (Color.PINK, Color.ORANGE, 2),
-        (Color.RED, Color.YELLOW, 2),
-        (Color.DARK_BLUE, Color.GREEN, 1),
-        (Color.GREEN, Color.RAILROAD, 1),
-        (Color.RAILROAD, Color.UTILITY, 1),
+    for first, second, count, value in (
+        (Color.LIGHT_BLUE, Color.BROWN, 1, 1),
+        (Color.LIGHT_BLUE, Color.RAILROAD, 1, 2),
+        (Color.PINK, Color.ORANGE, 2, 2),
+        (Color.RED, Color.YELLOW, 2, 3),
+        (Color.DARK_BLUE, Color.GREEN, 1, 4),
+        (Color.GREEN, Color.RAILROAD, 1, 4),
+        (Color.RAILROAD, Color.UTILITY, 1, 2),
     ):
         _copies(
             cards,
             prefix=f"wild-{first.value}-{second.value}",
             count=count,
             card_type=CardType.PROPERTY_WILD,
-            value=None,
+            value=value,
             colors=frozenset({first, second}),
         )
     _copies(
