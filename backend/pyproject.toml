@@ -5,6 +5,7 @@ description = "Authoritative realtime backend for Deal Room."
 requires-python = ">=3.12"
 dependencies = [
   "Flask>=3.0,<4.0",
+  "flask-cors>=4.0,<7.0",
   "Flask-SocketIO>=5.3,<6.0",
   "python-dotenv>=1.0,<2.0",
 ]
