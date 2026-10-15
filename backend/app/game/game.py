@@ -9,6 +9,9 @@ from enum import StrEnum
 from .cards import SET_SIZE, ActionType, Card, CardType, Color, build_playable_deck
 from .errors import GameRuleError
 
+HAND_LIMIT = 7
+PLAYS_PER_TURN = 3
+
 
 class TurnPhase(StrEnum):
     AWAITING_TURN_START = "awaiting_turn_start"
@@ -39,6 +42,7 @@ class GameState:
     actions_played: int = 0
     phase: TurnPhase = TurnPhase.AWAITING_TURN_START
     winner_id: str | None = None
+    rng: random.Random = field(default_factory=random.Random)
 
     @property
     def current_player(self) -> PlayerState:
@@ -68,8 +72,62 @@ class GameState:
             raise GameRuleError("There is no active turn to end.")
         if self.current_player.id != player_id:
             raise GameRuleError("Only the active player can end their turn.")
+        excess = len(self.current_player.hand) - HAND_LIMIT
+        if excess > 0:
+            raise GameRuleError(
+                f"Discard {excess} card(s) to get down to {HAND_LIMIT} before ending."
+            )
         self.current_player_index = (self.current_player_index + 1) % len(self.players)
         self.phase = TurnPhase.AWAITING_TURN_START
+
+    def discard_to_limit(self, player_id: str, card_ids: list[str]) -> None:
+        """Discard cards from an over-limit hand; never below the hand limit."""
+        player = self._require_active_player(player_id)
+        if len(card_ids) != len(set(card_ids)):
+            raise GameRuleError("A card can be discarded only once.")
+        if len(player.hand) <= HAND_LIMIT:
+            raise GameRuleError("Your hand is not over the limit.")
+        if any(card_id not in player.hand for card_id in card_ids):
+            raise GameRuleError("That card is not in this player's hand.")
+        if not card_ids or len(player.hand) - len(card_ids) < HAND_LIMIT:
+            raise GameRuleError(f"Discard only enough cards to reach {HAND_LIMIT}.")
+        for card_id in card_ids:
+            player.hand.remove(card_id)
+            self.discard_pile.append(card_id)
+
+    def require_active_player(self, player_id: str) -> PlayerState:
+        """Public guard: the player must hold the active turn."""
+        return self._require_active_player(player_id)
+
+    def commit_action_cards(self, player_id: str, card_ids: list[str]) -> None:
+        """Move hand cards to the discard pile, spending one play per card."""
+        player = self._require_active_player(player_id)
+        if len(card_ids) != len(set(card_ids)) or any(c not in player.hand for c in card_ids):
+            raise GameRuleError("The required cards are not in this player's hand.")
+        if self.actions_played + len(card_ids) > PLAYS_PER_TURN:
+            raise GameRuleError("A player can play at most three cards each turn.")
+        for card_id in card_ids:
+            self._use_play()
+            player.hand.remove(card_id)
+            self.discard_pile.append(card_id)
+
+    def remove_player(self, player_id: str) -> None:
+        """Drop a player mid-game, returning their cards to the discard pile."""
+        index = next((i for i, p in enumerate(self.players) if p.id == player_id), None)
+        if index is None:
+            return
+        removed = self.players.pop(index)
+        self.discard_pile.extend(removed.hand + removed.bank)
+        for cards in list(removed.properties.values()) + list(removed.improvements.values()):
+            self.discard_pile.extend(cards)
+        if not self.players:
+            return
+        if index < self.current_player_index:
+            self.current_player_index -= 1
+        elif index == self.current_player_index:
+            self.phase = TurnPhase.AWAITING_TURN_START
+            self.actions_played = 0
+        self.current_player_index %= len(self.players)
 
     def completed_set_count(self, player_id: str) -> int:
         player = self.player(player_id)
@@ -159,6 +217,24 @@ class GameState:
         self.discard_pile.append(card_id)
         self._draw_to_hand(player, 2)
 
+    def check_sly_deal(
+        self, player_id: str, target_id: str, property_card_id: str, color: Color
+    ) -> None:
+        self._require_other_player(player_id, target_id)
+        target_cards = self.player(target_id).properties.get(color, [])
+        if property_card_id not in target_cards:
+            raise GameRuleError("The target does not own that property in this set.")
+        if len(target_cards) >= SET_SIZE[color]:
+            raise GameRuleError("A Sly Deal cannot take a property from a complete set.")
+
+    def apply_sly_deal(
+        self, player_id: str, target_id: str, property_card_id: str, color: Color
+    ) -> None:
+        self.check_sly_deal(player_id, target_id, property_card_id, color)
+        self.player(target_id).properties[color].remove(property_card_id)
+        self.player(player_id).properties.setdefault(color, []).append(property_card_id)
+        self.check_for_winner(player_id)
+
     def play_sly_deal(
         self,
         player_id: str,
@@ -170,18 +246,56 @@ class GameState:
     ) -> None:
         """Take one property card that is not in the target's full set."""
         player = self._require_active_player(player_id)
-        target = self._require_other_player(player_id, target_id)
         self._require_hand_action(player, action_card_id, ActionType.SLY_DEAL)
-        target_cards = target.properties.get(color, [])
-        if property_card_id not in target_cards:
-            raise GameRuleError("The target does not own that property in this set.")
-        if len(target_cards) >= SET_SIZE[color]:
-            raise GameRuleError("A Sly Deal cannot take a property from a complete set.")
-
+        self.check_sly_deal(player_id, target_id, property_card_id, color)
         self._play_action_card(player, action_card_id)
-        target_cards.remove(property_card_id)
-        player.properties.setdefault(color, []).append(property_card_id)
+        self.apply_sly_deal(player_id, target_id, property_card_id, color)
+
+    def check_forced_deal(
+        self,
+        player_id: str,
+        target_id: str,
+        offered_property_id: str,
+        offered_color: Color,
+        requested_property_id: str,
+        requested_color: Color,
+    ) -> None:
+        player = self.player(player_id)
+        target = self._require_other_player(player_id, target_id)
+        if offered_property_id not in player.properties.get(offered_color, []):
+            raise GameRuleError("The offered property is not owned by the active player.")
+        target_cards = target.properties.get(requested_color, [])
+        if requested_property_id not in target_cards:
+            raise GameRuleError("The requested property is not owned by the target.")
+        if len(target_cards) >= SET_SIZE[requested_color]:
+            raise GameRuleError("A Forced Deal cannot take from a complete set.")
+
+    def apply_forced_deal(
+        self,
+        player_id: str,
+        target_id: str,
+        offered_property_id: str,
+        offered_color: Color,
+        requested_property_id: str,
+        requested_color: Color,
+    ) -> None:
+        self.check_forced_deal(
+            player_id,
+            target_id,
+            offered_property_id,
+            offered_color,
+            requested_property_id,
+            requested_color,
+        )
+        player, target = self.player(player_id), self.player(target_id)
+        player.properties[offered_color].remove(offered_property_id)
+        target.properties[requested_color].remove(requested_property_id)
+        player.properties.setdefault(requested_color, []).append(requested_property_id)
+        target.properties.setdefault(offered_color, []).append(offered_property_id)
+        _bank_orphaned_improvements(player, offered_color)
+        _bank_orphaned_improvements(target, requested_color)
         self.check_for_winner(player_id)
+        self.check_for_winner(target_id)
 
     def play_forced_deal(
         self,
@@ -196,25 +310,38 @@ class GameState:
     ) -> None:
         """Swap one owned property for a target property outside a full set."""
         player = self._require_active_player(player_id)
-        target = self._require_other_player(player_id, target_id)
         self._require_hand_action(player, action_card_id, ActionType.FORCED_DEAL)
-        if offered_property_id not in player.properties.get(offered_color, []):
-            raise GameRuleError("The offered property is not owned by the active player.")
-        target_cards = target.properties.get(requested_color, [])
-        if requested_property_id not in target_cards:
-            raise GameRuleError("The requested property is not owned by the target.")
-        if len(target_cards) >= SET_SIZE[requested_color]:
-            raise GameRuleError("A Forced Deal cannot take from a complete set.")
-
+        self.check_forced_deal(
+            player_id,
+            target_id,
+            offered_property_id,
+            offered_color,
+            requested_property_id,
+            requested_color,
+        )
         self._play_action_card(player, action_card_id)
-        player.properties[offered_color].remove(offered_property_id)
-        target_cards.remove(requested_property_id)
-        player.properties.setdefault(requested_color, []).append(requested_property_id)
-        target.properties.setdefault(offered_color, []).append(offered_property_id)
-        _bank_orphaned_improvements(player, offered_color)
-        _bank_orphaned_improvements(target, requested_color)
+        self.apply_forced_deal(
+            player_id,
+            target_id,
+            offered_property_id,
+            offered_color,
+            requested_property_id,
+            requested_color,
+        )
+
+    def check_deal_breaker(self, player_id: str, target_id: str, color: Color) -> None:
+        self._require_other_player(player_id, target_id)
+        if len(self.player(target_id).properties.get(color, [])) < SET_SIZE[color]:
+            raise GameRuleError("A Deal Breaker requires a complete target set.")
+
+    def apply_deal_breaker(self, player_id: str, target_id: str, color: Color) -> None:
+        self.check_deal_breaker(player_id, target_id, color)
+        player, target = self.player(player_id), self.player(target_id)
+        target_cards = target.properties[color]
+        player.properties.setdefault(color, []).extend(target_cards)
+        target.properties[color] = []
+        player.improvements.setdefault(color, []).extend(target.improvements.pop(color, []))
         self.check_for_winner(player_id)
-        self.check_for_winner(target_id)
 
     def play_deal_breaker(
         self,
@@ -226,17 +353,10 @@ class GameState:
     ) -> None:
         """Take an entire complete set and every attached improvement."""
         player = self._require_active_player(player_id)
-        target = self._require_other_player(player_id, target_id)
         self._require_hand_action(player, action_card_id, ActionType.DEAL_BREAKER)
-        target_cards = target.properties.get(color, [])
-        if len(target_cards) < SET_SIZE[color]:
-            raise GameRuleError("A Deal Breaker requires a complete target set.")
-
+        self.check_deal_breaker(player_id, target_id, color)
         self._play_action_card(player, action_card_id)
-        player.properties.setdefault(color, []).extend(target_cards)
-        target.properties[color] = []
-        player.improvements.setdefault(color, []).extend(target.improvements.pop(color, []))
-        self.check_for_winner(player_id)
+        self.apply_deal_breaker(player_id, target_id, color)
 
     def _require_other_player(self, player_id: str, target_id: str) -> PlayerState:
         if player_id == target_id:
@@ -258,9 +378,14 @@ class GameState:
         self.discard_pile.append(card_id)
 
     def _draw_to_hand(self, player: PlayerState, count: int) -> None:
-        if len(self.draw_pile) < count:
-            raise GameRuleError("The draw pile does not contain enough cards.")
+        """Draw up to ``count`` cards, reshuffling the discard pile when the deck runs dry."""
         for _ in range(count):
+            if not self.draw_pile:
+                if not self.discard_pile:
+                    return
+                self.draw_pile = self.discard_pile
+                self.discard_pile = []
+                self.rng.shuffle(self.draw_pile)
             player.hand.append(self.draw_pile.pop())
 
     def _require_active_player(self, player_id: str) -> PlayerState:
@@ -277,7 +402,7 @@ class GameState:
         return self.cards[card_id]
 
     def _use_play(self) -> None:
-        if self.actions_played >= 3:
+        if self.actions_played >= PLAYS_PER_TURN:
             raise GameRuleError("A player can play at most three cards each turn.")
         self.actions_played += 1
 

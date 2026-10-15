@@ -1,9 +1,30 @@
-import { useMemo, useState } from "react";
+import type { RoomView, Send } from "./api";
+import { Hand } from "./components/Hand";
+import { HostControls } from "./components/HostControls";
+import { PaymentPanel } from "./components/PaymentPanel";
+import { PlayerBoard } from "./components/PlayerBoard";
+import { ResponsePanel } from "./components/ResponsePanel";
+import { StatusOverlay } from "./components/StatusOverlay";
+import { TurnBanner } from "./components/TurnBanner";
+import { WinnerScreen } from "./components/WinnerScreen";
 
-import type { RoomView } from "./api";
+type Props = { room: RoomView; send: Send; onError: (message: string) => void; onLeave: () => void };
 
-export function GameTable({ room }: { room: RoomView }) {
-  const [selected, setSelected] = useState<string | null>(null);
-  const hand = useMemo(() => room.players.flatMap((player) => player.hand ?? []), [room]);
-  return <><section className="panel"><h2>{room.status === "lobby" ? "Lobby" : "Game table"}</h2><p>Tap a card, then choose an available action or target. The server validates every move.</p><button disabled={selected === null}>Play selected card</button><button onClick={() => setSelected(null)}>Clear selection</button></section><section className="hand"><h2>Your hand</h2><div className="cards">{hand.length ? hand.map((card) => <button className={selected === card ? "card selected" : "card"} key={card} onClick={() => setSelected(card)}><small>DEAL</small><strong>{card.replaceAll("-", " ")}</strong></button>) : <p>Your cards appear here when the game starts.</p>}</div></section></>;
+export function GameTable({ room, send, onError, onLeave }: Props) {
+  const players = room.players.filter((p) => p.active && !p.removed && p.bank !== undefined);
+  const myTurnActive = room.turn?.playerId === room.you && room.turn.phase === "active" && room.pending === null && room.status === "in_progress";
+  return (
+    <div className="game">
+      <TurnBanner room={room} send={send} onError={onError} />
+      <ResponsePanel room={room} send={send} onError={onError} />
+      <PaymentPanel room={room} send={send} onError={onError} />
+      <section className="boards" aria-label="Table">
+        {players.map((p) => <PlayerBoard key={p.id} player={p} room={room} send={send} onError={onError} canMove={myTurnActive} />)}
+      </section>
+      <Hand room={room} send={send} onError={onError} />
+      <HostControls room={room} send={send} onError={onError} />
+      <StatusOverlay room={room} />
+      <WinnerScreen room={room} onLeave={onLeave} />
+    </div>
+  );
 }

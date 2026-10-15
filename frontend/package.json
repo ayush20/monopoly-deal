@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@eslint/js": "latest",
+    "@testing-library/dom": "latest",
     "@testing-library/jest-dom": "latest",
     "@testing-library/react": "latest",
     "@types/node": "latest",
@@ -29,7 +30,7 @@
     "eslint-plugin-react-refresh": "latest",
     "globals": "latest",
     "jsdom": "latest",
-    "typescript": "latest",
+    "typescript": "~5.9.3",
     "typescript-eslint": "latest",
     "vitest": "latest"
   }
