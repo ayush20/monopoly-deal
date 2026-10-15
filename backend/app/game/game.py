@@ -159,6 +159,104 @@ class GameState:
         self.discard_pile.append(card_id)
         self._draw_to_hand(player, 2)
 
+    def play_sly_deal(
+        self,
+        player_id: str,
+        action_card_id: str,
+        *,
+        target_id: str,
+        property_card_id: str,
+        color: Color,
+    ) -> None:
+        """Take one property card that is not in the target's full set."""
+        player = self._require_active_player(player_id)
+        target = self._require_other_player(player_id, target_id)
+        self._require_hand_action(player, action_card_id, ActionType.SLY_DEAL)
+        target_cards = target.properties.get(color, [])
+        if property_card_id not in target_cards:
+            raise GameRuleError("The target does not own that property in this set.")
+        if len(target_cards) >= SET_SIZE[color]:
+            raise GameRuleError("A Sly Deal cannot take a property from a complete set.")
+
+        self._play_action_card(player, action_card_id)
+        target_cards.remove(property_card_id)
+        player.properties.setdefault(color, []).append(property_card_id)
+        self.check_for_winner(player_id)
+
+    def play_forced_deal(
+        self,
+        player_id: str,
+        action_card_id: str,
+        *,
+        target_id: str,
+        offered_property_id: str,
+        offered_color: Color,
+        requested_property_id: str,
+        requested_color: Color,
+    ) -> None:
+        """Swap one owned property for a target property outside a full set."""
+        player = self._require_active_player(player_id)
+        target = self._require_other_player(player_id, target_id)
+        self._require_hand_action(player, action_card_id, ActionType.FORCED_DEAL)
+        if offered_property_id not in player.properties.get(offered_color, []):
+            raise GameRuleError("The offered property is not owned by the active player.")
+        target_cards = target.properties.get(requested_color, [])
+        if requested_property_id not in target_cards:
+            raise GameRuleError("The requested property is not owned by the target.")
+        if len(target_cards) >= SET_SIZE[requested_color]:
+            raise GameRuleError("A Forced Deal cannot take from a complete set.")
+
+        self._play_action_card(player, action_card_id)
+        player.properties[offered_color].remove(offered_property_id)
+        target_cards.remove(requested_property_id)
+        player.properties.setdefault(requested_color, []).append(requested_property_id)
+        target.properties.setdefault(offered_color, []).append(offered_property_id)
+        _bank_orphaned_improvements(player, offered_color)
+        _bank_orphaned_improvements(target, requested_color)
+        self.check_for_winner(player_id)
+        self.check_for_winner(target_id)
+
+    def play_deal_breaker(
+        self,
+        player_id: str,
+        action_card_id: str,
+        *,
+        target_id: str,
+        color: Color,
+    ) -> None:
+        """Take an entire complete set and every attached improvement."""
+        player = self._require_active_player(player_id)
+        target = self._require_other_player(player_id, target_id)
+        self._require_hand_action(player, action_card_id, ActionType.DEAL_BREAKER)
+        target_cards = target.properties.get(color, [])
+        if len(target_cards) < SET_SIZE[color]:
+            raise GameRuleError("A Deal Breaker requires a complete target set.")
+
+        self._play_action_card(player, action_card_id)
+        player.properties.setdefault(color, []).extend(target_cards)
+        target.properties[color] = []
+        player.improvements.setdefault(color, []).extend(target.improvements.pop(color, []))
+        self.check_for_winner(player_id)
+
+    def _require_other_player(self, player_id: str, target_id: str) -> PlayerState:
+        if player_id == target_id:
+            raise GameRuleError("An action must target another player.")
+        return self.player(target_id)
+
+    def _require_hand_action(
+        self,
+        player: PlayerState,
+        card_id: str,
+        action: ActionType,
+    ) -> None:
+        if card_id not in player.hand or self.cards[card_id].action is not action:
+            raise GameRuleError("The required action card is not in this player's hand.")
+
+    def _play_action_card(self, player: PlayerState, card_id: str) -> None:
+        self._use_play()
+        player.hand.remove(card_id)
+        self.discard_pile.append(card_id)
+
     def _draw_to_hand(self, player: PlayerState, count: int) -> None:
         if len(self.draw_pile) < count:
             raise GameRuleError("The draw pile does not contain enough cards.")
@@ -182,6 +280,12 @@ class GameState:
         if self.actions_played >= 3:
             raise GameRuleError("A player can play at most three cards each turn.")
         self.actions_played += 1
+
+
+def _bank_orphaned_improvements(player: PlayerState, color: Color) -> None:
+    """Bank improvements when an action breaks their underlying set."""
+    if len(player.properties.get(color, [])) < SET_SIZE[color]:
+        player.bank.extend(player.improvements.pop(color, []))
 
 
 def create_game(player_ids: list[str], *, seed: int | None = None) -> GameState:
