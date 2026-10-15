@@ -26,6 +26,19 @@ The planned baseline is the official Monopoly Deal 2–5-player 110-card edition
 - Online-only controls (reconnection, pause, removal, room lifecycle) are product adaptations, not original game rules.
 - The interface will use original artwork and must not reproduce proprietary logos, card art, or other protected visual assets.
 
+## Rules-engine source record
+
+Phase 2 uses the 110-card G0351-style package as its source. Four cards are rules/reference cards, leaving a 106-card playable deck: 28 standard properties, 11 property wilds, 13 rent cards, 34 action cards, and 20 money cards. The engine asserts this composition before any game is created.
+
+Documented setup and turn rules now encoded in tests:
+
+- Deal five cards to each active player.
+- Start a turn by drawing two cards, or five cards when the player starts with no hand.
+- A player may play at most three cards on their turn.
+- A win requires three complete sets in different colours.
+- Wild properties may be moved between compatible sets only during their owner's turn and do not consume a card play.
+- A House requires a complete set; a Hotel requires that set's House.
+
 ## Unresolved questions
 
 None currently blocking Phase 1. During the rules-engine phase, any ambiguity found in the official guide—particularly timing and response windows—will be added here with its source and implementation decision.
