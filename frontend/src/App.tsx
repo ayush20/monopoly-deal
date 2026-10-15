@@ -1,51 +1,37 @@
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import type { Socket } from "socket.io-client";
 
-import { createHealthSocket, fetchHealth } from "./api";
-
-type CheckState = "checking" | "ready" | "unavailable";
+import { createGameSocket, type RoomResult, type RoomView } from "./api";
 
 function App() {
-  const [apiState, setApiState] = useState<CheckState>("checking");
-  const [socketState, setSocketState] = useState<CheckState>("checking");
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [room, setRoom] = useState<RoomView | null>(null);
+  const [notice, setNotice] = useState("Connect to create a private table.");
 
   useEffect(() => {
-    let active = true;
-    const socket: Socket = createHealthSocket();
-
-    void fetchHealth()
-      .then(() => active && setApiState("ready"))
-      .catch(() => active && setApiState("unavailable"));
-
-    socket.on("connect", () => active && setSocketState("ready"));
-    socket.on("connect_error", () => active && setSocketState("unavailable"));
-    socket.connect();
-
-    return () => {
-      active = false;
-      socket.disconnect();
-    };
+    const client = createGameSocket();
+    setSocket(client);
+    client.on("connect", () => setNotice("Realtime connection ready."));
+    client.on("connect_error", () => setNotice("Realtime connection unavailable."));
+    client.connect();
+    return () => client.disconnect();
   }, []);
 
-  return (
-    <main>
-      <section aria-labelledby="page-title">
-        <p className="eyebrow">Foundation check</p>
-        <h1 id="page-title">Deal Room</h1>
-        <p>A real-time card-table experience is being prepared.</p>
-        <dl>
-          <div>
-            <dt>API health</dt>
-            <dd data-testid="api-status">{apiState}</dd>
-          </div>
-          <div>
-            <dt>Realtime connection</dt>
-            <dd data-testid="socket-status">{socketState}</dd>
-          </div>
-        </dl>
-      </section>
-    </main>
-  );
+  function submit(event: FormEvent, command: "room:create" | "room:join") {
+    event.preventDefault();
+    if (socket === null) return;
+    const payload = command === "room:create" ? { name } : { name, code };
+    socket.emit(command, payload, (result: RoomResult) => {
+      if ("error" in result) setNotice(result.error);
+      else { setRoom(result.state); setNotice(`Room ${result.state.code} is ready.`); }
+    });
+  }
+
+  if (room !== null) return <main className="table"><header><p className="eyebrow">Room code</p><h1>{room.code}</h1><p>{notice}</p></header><section className="players">{room.players.map((player) => <article className="player" key={player.id}><strong>{player.name}</strong>{player.host && <small> Host</small>}<p>{player.connected ? "Connected" : "Reconnecting…"}</p></article>)}</section><section className="panel"><h2>{room.status === "lobby" ? "Lobby" : "Game table"}</h2><p>Player cards and available actions appear here when the match starts.</p></section></main>;
+
+  return <main className="welcome"><section><p className="eyebrow">Private multiplayer card table</p><h1>Deal Room</h1><p>{notice}</p><form onSubmit={(event) => submit(event, "room:create")}><label>Name<input aria-label="Name" value={name} onChange={(event) => setName(event.target.value)} required /></label><button>Create room</button></form><form onSubmit={(event) => submit(event, "room:join")}><label>Room code<input aria-label="Room code" value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} required /></label><button>Join room</button></form></section></main>;
 }
 
 export default App;
